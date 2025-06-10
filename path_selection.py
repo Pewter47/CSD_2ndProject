@@ -1,3 +1,6 @@
+import json
+import geoip2.database
+
 def guard_security ( client_loc , guards ) :
 # Calculate security score for guard set
 # based on client location and adversary model
@@ -28,3 +31,26 @@ def select_path ( relays , alpha_params ) :
 # Select until Bandwidth threshold reached .
 # Return bandwidth - weighted choice .
     return
+
+def main():
+    reader = geoip2.database.Reader('GeoLite2-Country.mmdb')
+
+    with open('tor_consensus.json', 'r') as file:
+        relays = json.load(file)
+
+    for relay in relays:
+        try:
+            response = reader.country(relay['ip'])
+            relay['country'] = response.country.iso_code
+            print(f"Relay {relay['nickname']} located in {relay['country']}")
+        except geoip2.errors.GeoIP2Error:
+            relay['country'] = 'Unknown'
+
+    with open('Project2ClientInput.json', 'r') as file:
+        config = json.load(file)
+
+    print("Relays loaded:", len(relays))
+    print("Client configuration loaded:", config)
+
+if __name__ == "__main__":
+    main()
