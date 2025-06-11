@@ -32,6 +32,15 @@ def select_path ( relays , alpha_params ) :
 # Return bandwidth - weighted choice .
     return
 
+country_trust_map = {}
+
+def get_country_trust(country):
+    if country in country_trust_map:
+        return country_trust_map[country]
+    else:
+        country_trust_map[country] = 0.5
+        return country_trust_map[country]
+
 def main():
     reader = geoip2.database.Reader('GeoLite2-Country.mmdb')
 
@@ -42,15 +51,23 @@ def main():
         try:
             response = reader.country(relay['ip'])
             relay['country'] = response.country.iso_code
-            print(f"Relay {relay['nickname']} located in {relay['country']}")
         except geoip2.errors.GeoIP2Error:
             relay['country'] = 'Unknown'
 
     with open('Project2ClientInput.json', 'r') as file:
         config = json.load(file)
 
-    print("Relays loaded:", len(relays))
-    print("Client configuration loaded:", config)
+    client_ip = config['Client']
+    dest_ip = config['Destination']
+
+    for alliance in config['Alliances']:
+        for country in alliance['countries']:
+            if country not in country_trust_map:
+                country_trust_map[country] = alliance['trust']
+            else:
+                country_trust_map[country] = min(country_trust_map[country], alliance['trust'])
+
+    print(country_trust_map)
 
 if __name__ == "__main__":
     main()
