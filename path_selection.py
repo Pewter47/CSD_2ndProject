@@ -33,6 +33,14 @@ def get_country_trust(country):
 def are_allies(country1, country2, alliances):
     return any(alliance for alliance in alliances if country1 in alliance['countries'] and country2 in alliance['countries'])
 
+def get_alliance_trust(country1, country2, alliances):
+    if country1 == country2:
+        return get_country_trust(country1)
+    for alliance in alliances:
+        if country1 in alliance['countries'] and country2 in alliance['countries']:
+            return alliance['trust']
+    return 1.0
+
 # By default, tor selects about 20 guard nodes, of which 3 are primary.
 def guard_security ( client_loc , guards , alliances , reader ) :
 # Calculate security score for guard set
@@ -41,48 +49,49 @@ def guard_security ( client_loc , guards , alliances , reader ) :
     scores = {}
     for guard in guards:
         guard_country = guard['country']
-        trust_score = get_country_trust(guard_country)
-        if client_country == guard_country or are_allies(client_country, guard_country, alliances):
-            scores[guard['fingerprint']] = trust_score * 0.5
-        else:
-            scores[guard['fingerprint']] = trust_score
+        trust_score = get_country_trust(guard_country) * get_alliance_trust(client_country, guard_country, alliances)
         
     return scores
 
-def exit_security ( client_loc , dest_loc , guard , exit , alliances ) :
+def exit_security ( client_loc , dest_loc , guard , exit , alliances , reader) :
 # Score exit relay based on guard / destination
-    str = dest_loc.split(':')
-    dest_ip = str[0]
-    dest_port = None
-    if len(str) == 2:
-        dest_port = str[1]
-    #"reject 0.0.0.0/8:*,
+    parts = dest_loc.split(':')
+    dest_ip = parts[0]
+    dest_port = int(parts[1]) if len(parts) == 2 else None
 
-    #check if exit can be used
     exit_policies = exit['exit'].split(', ')
-    valid_ports= []
     for policy in exit_policies:
-        accept, address = policy.split(' ')
+        rule, address = policy.strip().split(' ')
         ip, ports = address.split(':')
-        if ports.contains('-'):
-            port1,part2 = ports.split('-')
-            for port in range(int(port1), int(part2) + 1):
-                valid_ports.append(port)
+
+        if ports == '*':
+            portmin, portmax = 0, 65535
+        elif '-' in ports:
+            portmin, portmax = map(int, ports.split('-'))
         else:
-            valid_ports.append(int(ports))
-            
-        if accept == 'reject':
-            if ip == '*' or dest_ip == ip or ip_belongs(dest_ip, ip):
-                if ports == '*' or (dest_port and dest_port in valid_ports):
-                    return 0.0
-        elif accept == 'accept':
-            if ip == '*' or dest_ip == ip or ip_belongs(dest_ip, ip):
-                if ports == '*' or (dest_port and dest_port in valid_ports):
-                    break
-                
+            portmin = portmax = int(ports)
+
+        ip_match = (ip == '*') or (dest_ip == ip) or ip_belongs(dest_ip, ip)
+        port_match = dest_port is None or (portmin <= dest_port <= portmax)
+
+        if rule == 'reject' and ip_match and port_match:
+            return 0.0 # Assume exits always have reject *:*
+        elif rule == 'accept' and ip_match and port_match:
+            continue
+
     #scoring
-        
-    return 
+    guard_country = guard["country"]
+    exit_country = exit["country"]
+    client_country = get_country(client_loc, reader)
+    dest_country = get_country(dest_loc, reader)
+
+    base_score = min(get_country_trust(exit_country), get_country_trust(guard_country))
+    
+    client_exit_penalty = get_alliance_trust(client_country, exit_country, alliances)
+    guard_dest_penalty = get_alliance_trust(dest_country, guard_country, alliances)
+    guard_exit_penalty = get_alliance_trust(guard_country, exit_country, alliances)
+    base_score *= client_exit_penalty * guard_dest_penalty * guard_exit_penalty
+    return base_score
 
 def select_path ( relays , alpha_params ) :
 # SUGGESTED_GUARD_PARAMS = {
