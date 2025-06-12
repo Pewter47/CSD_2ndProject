@@ -58,12 +58,17 @@ def guard_security ( client_loc , guards , alliances , reader ) :
     return top10_guards
 
 def exit_security ( client_loc , dest_loc , guard , exit , alliances , reader) :
-# Score exit relay based on guard / destination
+    # Score exit relay based on guard / destination
+    # check a pair of exit and guard relays
+
+    # Anti AS 
+    if(guard['fingerprint'] == exit['fingerprint'] or ('family' in guard and exit['fingerprint'] in guard['family'])):
+        return 0.0
     parts = dest_loc.split(':')
     dest_ip = parts[0]
     dest_port = int(parts[1]) if len(parts) == 2 else None
 
-    exit_policies = exit['exit'].split(', ')
+    exit_policies = exit['exit'].split(',')
     for policy in exit_policies:
         rule, address = policy.strip().split(' ')
         ip, ports = address.split(':')
@@ -81,7 +86,7 @@ def exit_security ( client_loc , dest_loc , guard , exit , alliances , reader) :
         if rule == 'reject' and ip_match and port_match:
             return 0.0 # Assume exits always have reject *:*
         elif rule == 'accept' and ip_match and port_match:
-            break
+            break # If we find an accept rule, we can proceed
 
     #scoring
     guard_country = guard["country"]
@@ -97,28 +102,47 @@ def exit_security ( client_loc , dest_loc , guard , exit , alliances , reader) :
     base_score *= client_exit_penalty * guard_dest_penalty * guard_exit_penalty
     return base_score
 
-def select_path ( relays , alpha_params ) :
-# SUGGESTED_GUARD_PARAMS = {
-# ’safe_upper ’: 0.95 ,
-# ’safe_lower ’: 2.0 ,
-# ’accept_upper ’: 0.5 ,
-# ’accept_lower ’: 5.0 ,
-# ’ bandwidth_frac ’: 0.2
-#}
+def select_path ( clientIP,destIP,relays , alpha_params,reader, alliances ) :
+    # SUGGESTED_GUARD_PARAMS = {
+    # ’safe_upper ’: 0.95 ,
+    # ’safe_lower ’: 2.0 ,
+    # ’accept_upper ’: 0.5 ,
+    # ’accept_lower ’: 5.0 ,
+    # ’ bandwidth_frac ’: 0.2
+    # }
 
-# SUGGESTED_EXIT_PARAMS = {
-# ’safe_upper ’: 0.95 ,
-# ’safe_lower ’: 2.0 ,
-# ’accept_upper ’: 0.1 ,
-# ’accept_lower ’: 10.0 ,
-# ’ bandwidth_frac ’: 0.2
-#}
-# Sort relays by descending trust score
-# Separate into safe / acceptable categories ( recommended values above )
-# Select until Bandwidth threshold reached .
-# Return bandwidth - weighted choice .
-    return
+    # SUGGESTED_EXIT_PARAMS = {
+    # ’safe_upper ’: 0.95 ,
+    # ’safe_lower ’: 2.0 ,
+    # ’accept_upper ’: 0.1 ,
+    # ’accept_lower ’: 10.0 ,
+    # ’ bandwidth_frac ’: 0.2
+    #}
+    # Sort relays by descending trust score
+    # Separate into safe / acceptable categories ( recommended values above )
+    # Select until Bandwidth threshold reached .
+    # Return bandwidth - weighted choice .
+    guards = guard_security(clientIP, relays, alliances, reader)
+    exits = {} # Dictionary to hold exit scores, fingerprint as key, score as value
+    for guard_fingerprint, guard in guards.items():
+        # For each guard, calculate exit security
+        # and update the exits dictionary
+        for relay in relays:
+            if relay['fingerprint'] != guard_fingerprint:  # Avoid self-pairing
+                score = exit_security(clientIP, destIP, guard, relay, alliances, reader)
+                if score > 0:  # Only consider positive scores
+                    exits[relay['fingerprint']] = score
+    if not exits or not guards:
+        return  None  # No valid exits or guards found
+    
+    # Randomly select paths based on the scores
+    
+    
+    return exits
 
+def filter_relays(path, relays, alpha_params):
+    # Filter relays based on the path and alpha parameters
+    return None
 def main():
     reader = geoip2.database.Reader('GeoLite2-Country.mmdb')
 
