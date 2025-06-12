@@ -43,15 +43,19 @@ def get_alliance_trust(country1, country2, alliances):
 
 # By default, tor selects about 20 guard nodes, of which 3 are primary.
 def guard_security ( client_loc , guards , alliances , reader ) :
-# Calculate security score for guard set
-# based on client location and adversary model
+    # Calculate security score for guard set
+    # based on client location and adversary model
     client_country = get_country(client_loc, reader)
     scores = {}
+
     for guard in guards:
         guard_country = guard['country']
         trust_score = get_country_trust(guard_country) * get_alliance_trust(client_country, guard_country, alliances)
-        
-    return scores
+        scores[guard['fingerprint']] = trust_score
+
+    top10_guards = dict(sorted(scores.items(), key=lambda item: item[1], reverse=True)[:10])
+
+    return top10_guards
 
 def exit_security ( client_loc , dest_loc , guard , exit , alliances , reader) :
 # Score exit relay based on guard / destination
@@ -77,7 +81,7 @@ def exit_security ( client_loc , dest_loc , guard , exit , alliances , reader) :
         if rule == 'reject' and ip_match and port_match:
             return 0.0 # Assume exits always have reject *:*
         elif rule == 'accept' and ip_match and port_match:
-            continue
+            break
 
     #scoring
     guard_country = guard["country"]
