@@ -2,6 +2,7 @@ import json
 import ipaddress
 import geoip2.database
 
+# Structure : {country:[ c1: {'c2': s2, 'c3': s3}, c2: {'c1': s1, 'c3': s3}, ...], c2: {...}, ...}
 country_trust_map = {}
 
 def ip_belongs(ip_str, network_str):
@@ -35,25 +36,26 @@ def are_allies(country1, country2, alliances):
 
 def get_alliance_trust(country1, country2, alliances):
     if country1 == country2:
-        return get_country_trust(country1)
+        return 0.0
     for alliance in alliances:
         if country1 in alliance['countries'] and country2 in alliance['countries']:
             return alliance['trust']
     return 1.0
 
 # By default, tor selects about 20 guard nodes, of which 3 are primary.
-def guard_security ( client_loc , guards , alliances , reader ) :
+def guard_security ( client_loc , guards , alliances, reader ) :
     # Calculate security score for guard set
     # based on client location and adversary model
     client_country = get_country(client_loc, reader)
-    scores = {}
-
+    scores = []
     for guard in guards:
         guard_country = guard['country']
         trust_score = get_country_trust(guard_country) * get_alliance_trust(client_country, guard_country, alliances)
-        scores[guard['fingerprint']] = trust_score
+        if trust_score > 0:
+            scores.append((guard, trust_score))
 
-    top10_guards = dict(sorted(scores.items(), key=lambda item: item[1], reverse=True)[:10])
+    top10_guards =  sorted(scores, key=lambda x: x[1], reverse=True)[:10]  # Select top 10 guards
+    # Sort guards by descending trust score and select top 10
 
     return top10_guards
 
@@ -118,7 +120,28 @@ def is_exit_safe(exit_score, best_score, exit_params):
     return exit_score >= best_score * exit_params['safe_upper'] and \
             (1 - exit_score) <= (1 - best_score) * exit_params['safe_lower']
 
-def select_path ( clientIP,destIP,relays , alpha_params,reader, alliances ) :
+def select_path(clientIP, destIP, relays, reader, alliances, alpha_params={'guard_params': 
+                                                                           {'safe_upper': 0.95, 
+                                                                                'safe_lower': 2.0, 
+                                                                                'accept_upper': 0.5, 
+                                                                                'accept_lower': 5.0, 
+                                                                                'bandwidth_frac': 0.2
+                                                                            }, 
+                                                                           'exit_params': {
+                                                                                'safe_upper': 0.95,
+                                                                                'safe_lower': 2.0,
+                                                                                'accept_upper': 0.1,
+                                                                                'accept_lower': 10.0,
+                                                                                'bandwidth_frac': 0.2
+                                                                            }}):
+    # Select a path based on the client IP, destination IP, and available relays.
+    # Uses guard and exit security functions to filter and score relays.
+    
+    # Filter relays based on alpha parameters
+    # relays = filter_relays(path, relays, alpha_params) if path else relays
+
+    # If no path is provided, use all relays
+    # path = path if path else (relays if not alpha_params else {
     # SUGGESTED_GUARD_PARAMS = {
     # ’safe_upper ’: 0.95 ,
     # ’safe_lower ’: 2.0 ,
@@ -141,6 +164,8 @@ def select_path ( clientIP,destIP,relays , alpha_params,reader, alliances ) :
     guard_params = alpha_params['guard_params']
     exit_params = alpha_params['exit_params']
     guards = guard_security(clientIP, relays, alliances, reader)
+    for g in guards:
+        print(g[0]['fingerprint'], g[1])  # Debugging output for guard fingerprints and scores
     exits = {} # Dictionary to hold exit scores, fingerprint as key, score as value
     for guard_fingerprint, _ in guards.items():
         guard = next((r for r in relays if r['fingerprint'] == guard_fingerprint), None)
@@ -153,8 +178,6 @@ def select_path ( clientIP,destIP,relays , alpha_params,reader, alliances ) :
                     exits[relay['fingerprint']] = score
     if not exits or not guards:
         return  None  # No valid exits or guards found
-    
-    # Randomly select paths based on the scores
     
     
     return exits
@@ -177,13 +200,15 @@ def main():
     client_ip = config['Client']
     dest_ip = config['Destination']
     alliances = config['Alliances']
-
+    
     for alliance in alliances:
         for country in alliance['countries']:
             if country not in country_trust_map:
                 country_trust_map[country] = alliance['trust']
             else:
                 country_trust_map[country] = min(country_trust_map[country], alliance['trust'])
+    print("Country Trust Map:", country_trust_map)
+    guard, exits = select_path(client_ip, dest_ip, relays, reader, alliances)
 
 if __name__ == "__main__":
     main()
