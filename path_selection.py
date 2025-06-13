@@ -62,7 +62,7 @@ def exit_security ( client_loc , dest_loc , guard , exit , alliances , reader) :
     # check a pair of exit and guard relays
 
     # Anti AS 
-    if(guard['fingerprint'] == exit['fingerprint'] or ('family' in guard and exit['fingerprint'] in guard['family'])):
+    if(guard['fingerprint'] == exit['fingerprint'] or guard['asn'] == exit['asn'] or ('family' in guard and exit['fingerprint'] in guard['family'])):
         return 0.0
     parts = dest_loc.split(':')
     dest_ip = parts[0]
@@ -102,6 +102,22 @@ def exit_security ( client_loc , dest_loc , guard , exit , alliances , reader) :
     base_score *= client_exit_penalty * guard_dest_penalty * guard_exit_penalty
     return base_score
 
+def is_guard_acceptable(guard_score, best_score, guard_params):
+    return guard_score >= best_score * guard_params['accept_upper'] and \
+            (1 - guard_score) <= (1 - best_score) * guard_params['accept_lower']
+
+def is_exit_acceptable(exit_score, best_score, exit_params):
+    return exit_score >= best_score * exit_params['accept_upper'] and \
+            (1 - exit_score) <= (1 - best_score) * exit_params['accept_lower']
+
+def is_guard_safe(guard_score, best_score, guard_params):
+    return guard_score >= best_score * guard_params['safe_upper'] and \
+            (1 - guard_score) <= (1 - best_score) * guard_params['safe_lower']
+
+def is_exit_safe(exit_score, best_score, exit_params):
+    return exit_score >= best_score * exit_params['safe_upper'] and \
+            (1 - exit_score) <= (1 - best_score) * exit_params['safe_lower']
+
 def select_path ( clientIP,destIP,relays , alpha_params,reader, alliances ) :
     # SUGGESTED_GUARD_PARAMS = {
     # ’safe_upper ’: 0.95 ,
@@ -122,9 +138,12 @@ def select_path ( clientIP,destIP,relays , alpha_params,reader, alliances ) :
     # Separate into safe / acceptable categories ( recommended values above )
     # Select until Bandwidth threshold reached .
     # Return bandwidth - weighted choice .
+    guard_params = alpha_params['guard_params']
+    exit_params = alpha_params['exit_params']
     guards = guard_security(clientIP, relays, alliances, reader)
     exits = {} # Dictionary to hold exit scores, fingerprint as key, score as value
-    for guard_fingerprint, guard in guards.items():
+    for guard_fingerprint, _ in guards.items():
+        guard = next((r for r in relays if r['fingerprint'] == guard_fingerprint), None)
         # For each guard, calculate exit security
         # and update the exits dictionary
         for relay in relays:
