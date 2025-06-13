@@ -36,7 +36,7 @@ def are_allies(country1, country2, alliances):
 
 def get_alliance_trust(country1, country2, alliances):
     if country1 == country2:
-        return 0.0
+        return 0.0 # country_trust_map[country]
     for alliance in alliances:
         if country1 in alliance['countries'] and country2 in alliance['countries']:
             return alliance['trust']
@@ -53,11 +53,8 @@ def guard_security ( client_loc , guards , alliances, reader ) :
         trust_score = get_country_trust(guard_country) * get_alliance_trust(client_country, guard_country, alliances)
         if trust_score > 0:
             scores.append((guard, trust_score))
+    return sorted(scores, key=lambda x: x[1], reverse=True)  # Select top 10 guards
 
-    top10_guards =  sorted(scores, key=lambda x: x[1], reverse=True)[:10]  # Select top 10 guards
-    # Sort guards by descending trust score and select top 10
-
-    return top10_guards
 
 def exit_security ( client_loc , dest_loc , guard , exit , alliances , reader) :
     # Score exit relay based on guard / destination
@@ -104,23 +101,34 @@ def exit_security ( client_loc , dest_loc , guard , exit , alliances , reader) :
     base_score *= client_exit_penalty * guard_dest_penalty * guard_exit_penalty
     return base_score
 
-def is_guard_acceptable(guard_score, best_score, guard_params):
-    return guard_score >= best_score * guard_params['accept_upper'] and \
-            (1 - guard_score) <= (1 - best_score) * guard_params['accept_lower']
+def is_relay_compatible (relay_score, best_score, upper,lower):
+    return relay_score >= best_score * upper  and \
+            (1 - relay_score) <= (1 - best_score) * lower
 
-def is_exit_acceptable(exit_score, best_score, exit_params):
-    return exit_score >= best_score * exit_params['accept_upper'] and \
-            (1 - exit_score) <= (1 - best_score) * exit_params['accept_lower']
+def filter_relays(relay_scores, alpha_params,global_bandwidth):
+    safe_upper = alpha_params['safe_upper']
+    safe_lower = alpha_params['safe_lower']
+    accept_upper = alpha_params['accept_upper']
+    accept_lower = alpha_params['accept_lower']
+    max_bandwidth = alpha_params['bandwidth_frac']* global_bandwidth
 
-def is_guard_safe(guard_score, best_score, guard_params):
-    return guard_score >= best_score * guard_params['safe_upper'] and \
-            (1 - guard_score) <= (1 - best_score) * guard_params['safe_lower']
+    safe = []
+    acceptable = [] 
+    best_score = relay_scores[0][1]
+    for (relay, score) in relay_scores:
+        if(max_bandwidth > 0):
+            if is_relay_compatible(score, best_score, safe_upper, safe_lower):
+                safe.append(relay)
+                acceptable.append(relay)
+            elif is_relay_compatible(score, best_score, accept_upper, accept_lower):
+                acceptable.append(relay)
+            max_bandwidth -= relay['bandwidth']['measured'] if relay['bandwidth']['measured'] > 0 else relay['bandwidth']['average']
+        else:
+            break
+    
+    return safe, acceptable
 
-def is_exit_safe(exit_score, best_score, exit_params):
-    return exit_score >= best_score * exit_params['safe_upper'] and \
-            (1 - exit_score) <= (1 - best_score) * exit_params['safe_lower']
-
-def select_path(clientIP, destIP, relays, reader, alliances, alpha_params={'guard_params': 
+def select_path(clientIP, destIP, relays, reader, alliances,global_bandwidth, alpha_params={'guard_params': 
                                                                            {'safe_upper': 0.95, 
                                                                                 'safe_lower': 2.0, 
                                                                                 'accept_upper': 0.5, 
@@ -164,27 +172,43 @@ def select_path(clientIP, destIP, relays, reader, alliances, alpha_params={'guar
     guard_params = alpha_params['guard_params']
     exit_params = alpha_params['exit_params']
     guards = guard_security(clientIP, relays, alliances, reader)
-    for g in guards:
-        print(g[0]['fingerprint'], g[1])  # Debugging output for guard fingerprints and scores
-    exits = {} # Dictionary to hold exit scores, fingerprint as key, score as value
-    for guard_fingerprint, _ in guards.items():
-        guard = next((r for r in relays if r['fingerprint'] == guard_fingerprint), None)
+    safe_guards, acceptable_guards = filter_relays(guards, guard_params,global_bandwidth)
+    # print("Safe Guards:", len(safe_guards), "Acceptable Guards:", len(acceptable_guards))
+    # sum_bandwidth = sum(
+    #     guard['bandwidth']['measured'] if guard['bandwidth']['measured'] > 0 else guard['bandwidth']['average']
+    #     for guard in safe_guards
+    # )
+    # print("Total Safe Guard Bandwidth:", sum_bandwidth)
+    # print("Fraction of Global Bandwidth:", sum_bandwidth / global_bandwidth)
+
+    for guard in safe_guards:
+        exits = []
         # For each guard, calculate exit security
         # and update the exits dictionary
         for relay in relays:
-            if relay['fingerprint'] != guard_fingerprint:  # Avoid self-pairing
+            if relay['fingerprint'] != guard['fingerprint']:  # Avoid self-pairing
                 score = exit_security(clientIP, destIP, guard, relay, alliances, reader)
                 if score > 0:  # Only consider positive scores
-                    exits[relay['fingerprint']] = score
+                    exits.append((relay, score))
+
+        exits.sort(key=lambda x: x[1], reverse=True)  # Sort exits by score
+        best_exit = exits[0][0]
+        print(len(safe_guards))
+        print("Best Exit for Guard", guard['fingerprint'], ":", best_exit['fingerprint'], "with score", exits[0][1])
+        safe_exits, acceptable_exits = filter_relays(exits, exit_params, global_bandwidth)
+        # print("Safe Exits:", len(safe_exits), "Acceptable Exits:", len(acceptable_exits))
+        # sum_bandwidth = sum(
+        #     exit['bandwidth']['measured'] if exit['bandwidth']['measured'] > 0 else exit['bandwidth']['average']
+        #     for exit in safe_exits
+        # )
+        # print("Total Safe Exit Bandwidth:", sum_bandwidth)
+        # print("Fraction of Global Bandwidth:", sum_bandwidth / global_bandwidth)
     if not exits or not guards:
         return  None  # No valid exits or guards found
     
     
     return exits
 
-def filter_relays(path, relays, alpha_params):
-    # Filter relays based on the path and alpha parameters
-    return None
 def main():
     reader = geoip2.database.Reader('GeoLite2-Country.mmdb')
 
@@ -208,7 +232,13 @@ def main():
             else:
                 country_trust_map[country] = min(country_trust_map[country], alliance['trust'])
     print("Country Trust Map:", country_trust_map)
-    guard, exits = select_path(client_ip, dest_ip, relays, reader, alliances)
+    global_bandwidth = sum(
+        relay['bandwidth']['measured'] if relay['bandwidth']['measured'] > 0 else relay['bandwidth']['average']
+        for relay in relays
+    )
+    print("Global Bandwidth:", global_bandwidth)
+
+    exits = select_path(client_ip, dest_ip, relays, reader, alliances, global_bandwidth)
 
 if __name__ == "__main__":
     main()
