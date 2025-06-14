@@ -3,7 +3,6 @@ import ipaddress
 import random
 import geoip2.database
 
-# Structure : {country:[ c1: {'c2': s2, 'c3': s3}, c2: {'c1': s1, 'c3': s3}, ...], c2: {...}, ...}
 country_trust_map = {}
 
 def ip_belongs(ip_str, network_str):
@@ -29,7 +28,7 @@ def get_country_trust(country):
         if country == 'Unknown':
             country_trust_map[country] = 0.0
         else:
-            country_trust_map[country] = 0.2 # Default value (doesn't appear so not very trusted) (may be changed)
+            country_trust_map[country] = 0.05 # Default value (doesn't appear so not trusted) (may be changed)
         return country_trust_map[country]
     
 def are_allies(country1, country2, alliances):
@@ -37,7 +36,7 @@ def are_allies(country1, country2, alliances):
 
 def get_alliance_trust(country1, country2, alliances):
     if country1 == country2:
-        return 0.0 # country_trust_map[country]
+        return get_country_trust(country1)
     for alliance in alliances:
         if country1 in alliance['countries'] and country2 in alliance['countries']:
             return alliance['trust']
@@ -45,7 +44,6 @@ def get_alliance_trust(country1, country2, alliances):
 
 def get_effective_bandwidth(relay):
     # Calculate the effective bandwidth of a relay.
-    # Use measured bandwidth if available, otherwise use average bandwidth.
     if relay['bandwidth']['measured'] > 0:
         return relay['bandwidth']['measured']
     elif relay['bandwidth']['average'] > 0:
@@ -56,7 +54,7 @@ def get_effective_bandwidth(relay):
 def bandwidth_weighted_choice(relays):
     total_bw = sum(get_effective_bandwidth(r) for r in relays)
     if total_bw == 0:
-        return random.choice(relays)  # fallback
+        return random.choice(relays)
 
     r = random.uniform(0, total_bw)
     accum = 0
@@ -66,7 +64,6 @@ def bandwidth_weighted_choice(relays):
         if accum >= r:
             return relay
 
-# By default, tor selects about 20 guard nodes, of which 3 are primary.
 def guard_security ( client_loc , guards , alliances, reader ) :
     # Calculate security score for guard set
     # based on client location and adversary model
@@ -77,14 +74,14 @@ def guard_security ( client_loc , guards , alliances, reader ) :
         trust_score = get_country_trust(guard_country) * get_alliance_trust(client_country, guard_country, alliances)
         if trust_score > 0:
             scores.append((guard, trust_score))
-    return sorted(scores, key=lambda x: x[1], reverse=True)  # Select top 10 guards
+    return sorted(scores, key=lambda x: x[1], reverse=True)
 
 
 def exit_security ( client_loc , dest_loc , guard , exit , alliances , reader) :
     # Score exit relay based on guard / destination
     # check a pair of exit and guard relays
 
-    # Anti AS,AUTO,FAMILY
+    # Anti ASN,self,FAMILY
     if(guard['fingerprint'] == exit['fingerprint'] or guard['asn'] == exit['asn'] or ('family' in guard and exit['fingerprint'] in guard['family'])):
         return 0.0
     parts = dest_loc.split(':')
@@ -172,31 +169,7 @@ def select_path(clientIP, destIP, relays, reader, alliances,global_bandwidth, al
                                                                             }}):
     # Select a path based on the client IP, destination IP, and available relays.
     # Uses guard and exit security functions to filter and score relays.
-    
-    # Filter relays based on alpha parameters
-    # relays = filter_relays(path, relays, alpha_params) if path else relays
 
-    # If no path is provided, use all relays
-    # path = path if path else (relays if not alpha_params else {
-    # SUGGESTED_GUARD_PARAMS = {
-    # ’safe_upper ’: 0.95 ,
-    # ’safe_lower ’: 2.0 ,
-    # ’accept_upper ’: 0.5 ,
-    # ’accept_lower ’: 5.0 ,
-    # ’ bandwidth_frac ’: 0.2
-    # }
-
-    # SUGGESTED_EXIT_PARAMS = {
-    # ’safe_upper ’: 0.95 ,
-    # ’safe_lower ’: 2.0 ,
-    # ’accept_upper ’: 0.1 ,
-    # ’accept_lower ’: 10.0 ,
-    # ’ bandwidth_frac ’: 0.2
-    #}
-    # Sort relays by descending trust score
-    # Separate into safe / acceptable categories ( recommended values above )
-    # Select until Bandwidth threshold reached .
-    # Return bandwidth - weighted choice .
     SAFE_GUARD_COUNT = 3
     ACCEPTABLE_GUARD_COUNT = 20
     MAX_ATTEMPTS = 5
@@ -209,19 +182,18 @@ def select_path(clientIP, destIP, relays, reader, alliances,global_bandwidth, al
     attempt = 0
     def relax_params(params):
         # Relax the parameters for the next attempt
-        params['accept_upper'] /= 2.0
-        params['accept_lower'] *= 2.0
+        params['accept_upper'] /= 1.1
+        params['accept_lower'] *= 1.1
         return params
     while attempt < MAX_ATTEMPTS and len(best_guard_exit) < SAFE_GUARD_COUNT:
         safe_guards, acceptable_guards = filter_relays(guards, guard_params, global_bandwidth)
-        print("Safe Guards:", len(safe_guards), "Acceptable Guards:", len(acceptable_guards))
+        # print("Safe Guards:", len(safe_guards), "Acceptable Guards:", len(acceptable_guards))
     
         if (not safe_guards and not acceptable_guards) or (len(safe_guards) < SAFE_GUARD_COUNT and len(acceptable_guards) < ACCEPTABLE_GUARD_COUNT):
             # No acceptable guards even with relaxed policy
             guard_params = relax_params(guard_params)
             attempt += 1
             continue
-        
         # print("Safe Guards:", len(safe_guards), "Acceptable Guards:", len(acceptable_guards))
         # sum_bandwidth = sum(
         #     guard['bandwidth']['measured'] if guard['bandwidth']['measured'] > 0 else guard['bandwidth']['average']
@@ -244,23 +216,15 @@ def select_path(clientIP, destIP, relays, reader, alliances,global_bandwidth, al
                         exits.append((relay, score))
             exits.sort(key=lambda x: x[1], reverse=True)
             if exits:  # If we have exits for this guard
-                # safe_exits, acceptable_exits = filter_relays(exits, exit_params, global_bandwidth)
-                # print("Safe Exits:", len(safe_exits), "Acceptable Exits:", len(acceptable_exits))
-                # sum_bandwidth = sum(
-                #     exit['bandwidth']['measured'] if exit['bandwidth']['measured'] > 0 else exit['bandwidth']['average']
-                #     for exit in safe_exits
-                # )
-                # print("Total Safe Exit Bandwidth:", sum_bandwidth)
-                # print("Fraction of Global Bandwidth:", sum_bandwidth / global_bandwidth)
                 best_exit = exits[0][0]
                 best_exit_score = exits[0][1]
                 bandwidth_score = min(get_effective_bandwidth(best_exit), get_effective_bandwidth(guard))
-                guard_exit_score = min(guard_score, best_exit_score) ** 4 * bandwidth_score
+                guard_exit_score = min(guard_score, best_exit_score) ** 4 * bandwidth_score # The security score is more important than bandwidth 
                 best_guard_exit[f'{guard['fingerprint']}|{best_exit['fingerprint']}'] = guard_exit_score
-                print(f"Guard {guard['fingerprint']} has safe exit {exits[0][0]['fingerprint']}")
+                # print(f"Guard {guard['fingerprint']} has safe exit {exits[0][0]['fingerprint']}")
                 continue
         if len(best_guard_exit) >= ACCEPTABLE_GUARD_COUNT:
-            print(f"Found {len(best_guard_exit)} valid guard-exit pairs.")
+            # print(f"Found {len(best_guard_exit)} valid guard-exit pairs.")
             break
         print(f"Attempt {attempt + 1}: No valid guard-exit pair found, relaxing parameters...")
         guard_params = relax_params(guard_params)
@@ -313,19 +277,28 @@ def main():
                 country_trust_map[country] = alliance['trust']
             else:
                 country_trust_map[country] = min(country_trust_map[country], alliance['trust'])
-    print("Country Trust Map:", country_trust_map)
+
     global_bandwidth = sum(
         relay['bandwidth']['measured'] if relay['bandwidth']['measured'] > 0 else relay['bandwidth']['average']
         for relay in relays
     )
-    print("Global Bandwidth:", global_bandwidth)
 
     guard, middle, exit = select_path(client_ip, dest_ip, relays, reader, alliances, global_bandwidth)
 
     if guard and middle and exit:
-        print(f"Selected Guard: {guard['fingerprint']}, Middle Relay: {middle['fingerprint']}, Exit: {exit['fingerprint']}")
+        output = {
+            'guard': guard,
+            'middle': middle,
+            'exit': exit
+        }
+        #writing output to file
+        with open('selected_path.json', 'w') as outfile:
+            json.dump(output, outfile, indent=4)
+        # print(f"Selected Guard: {guard['fingerprint']}, Middle Relay: {middle['fingerprint']}, Exit: {exit['fingerprint']}")
+        print(output)
     else:
         print("No valid path found.")
+        
 
 if __name__ == "__main__":
     main()
